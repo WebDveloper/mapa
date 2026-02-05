@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Minha localização no mapa</title>
+
+  <!-- Leaflet -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; }
+
+    .panel {
+      position: absolute;
+      z-index: 1000;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      max-width: 520px;
+      background: rgba(255,255,255,0.94);
+      border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 14px;
+      padding: 12px 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .btn {
+      appearance: none;
+      border: 1px solid rgba(0,0,0,0.15);
+      background: #fff;
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn:active { transform: translateY(1px); }
+    .muted { color: #333; opacity: 0.85; font-size: 13px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .ok { color: #0a7; font-weight: 700; }
+    .warn { color: #c60; font-weight: 700; }
+    .err { color: #c00; font-weight: 700; }
+    .divider { height: 1px; background: rgba(0,0,0,0.08); margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="panel">
+    <div class="row">
+      <button class="btn" id="btnLocate">📍 Localizar agora</button>
+      <button class="btn" id="btnFollow">🔄 Acompanhar (on/off)</button>
+      <button class="btn" id="btnCopy">📋 Copiar lat/lng</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="muted">
+      Coordenadas: <span class="mono" id="coords">—</span> |
+      Precisão: <span class="mono" id="acc">—</span> |
+      Última atualização: <span class="mono" id="ts">—</span>
+      <div class="muted" style="margin-top:6px">
+        Dica: se não funcionar, abra em <span class="mono">https://</span> ou <span class="mono">http://localhost</span>.
+      </div>
+    </div>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <script>
+    const elStatus = document.getElementById("status");
+    const elCoords = document.getElementById("coords");
+    const elAcc = document.getElementById("acc");
+    const elTs = document.getElementById("ts");
+
+    const btnLocate = document.getElementById("btnLocate");
+    const btnFollow = document.getElementById("btnFollow");
+    const btnCopy = document.getElementById("btnCopy");
+
+    const map = L.map("map", { zoomControl: true }).setView([-23.5505, -46.6333], 12); // fallback SP
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 20,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    let marker = null;
+    let accuracyCircle = null;
+    let watchId = null;
+
+    function setStatus(type, text) {
+      elStatus.className = "muted " + (type || "");
+      elStatus.textContent = text || "";
+    }
+
+    function fmt(n) { return (typeof n === "number") ? n.toFixed(6) : "—"; }
+
+    function updateUI(pos) {
+      const { latitude, longitude, accuracy } = pos.coords;
+      const when = new Date(pos.timestamp);
+
+      elCoords.textContent = `${fmt(latitude)}, ${fmt(longitude)}`;
+      elAcc.textContent = accuracy ? `${Math.round(accuracy)} m` : "—";
+      elTs.textContent = when.toLocaleString("pt-BR");
+
+      const latlng = [latitude, longitude];
+
+      if (!marker) {
+        marker = L.marker(latlng).addTo(map).bindPopup("Você está aqui").openPopup();
+      } else {
+        marker.setLatLng(latlng);
+      }
+
+      if (!accuracyCircle) {
+        accuracyCircle = L.circle(latlng, { radius: accuracy || 0 }).addTo(map);
+      } else {
+        accuracyCircle.setLatLng(latlng);
+        accuracyCircle.setRadius(accuracy || 0);
+      }
+
+      map.setView(latlng, Math.max(map.getZoom(), 16), { animate: true });
+    }
+
+    function geoError(err) {
+      const msg = err?.message || "Não foi possível obter sua localização.";
+      setStatus("err", "❌ " + msg);
+      console.warn(err);
+    }
+
+    function locateOnce() {
+      if (!navigator.geolocation) {
+        setStatus("err", "❌ Geolocalização não suportada neste navegador.");
+        return;
+      }
+      setStatus("warn", "⏳ Obtendo localização...");
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { setStatus("ok", "✅ Localização atualizada"); updateUI(pos); },
+        geoError,
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+
+    function toggleFollow() {
+      if (!navigator.geolocation) {
+        setStatus("err", "❌ Geolocalização não suportada.");
+        return;
+      }
+
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        setStatus("", "Acompanhamento desligado");
+        return;
+      }
+
+      setStatus("warn", "🔄 Acompanhando (watchPosition)...");
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => { setStatus("ok", "✅ Atualizando em tempo real"); updateUI(pos); },
+        geoError,
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 1000 }
+      );
+    }
+
+    async function copyCoords() {
+      const text = elCoords.textContent;
+      if (!text || text === "—") {
+        setStatus("warn", "⚠️ Sem coordenadas para copiar ainda.");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus("ok", "📋 Copiado: " + text);
+      } catch {
+        // fallback
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        setStatus("ok", "📋 Copiado: " + text);
+      }
+    }
+
+    btnLocate.addEventListener("click", locateOnce);
+    btnFollow.addEventListener("click", toggleFollow);
+    btnCopy.addEventListener("click", copyCoords);
+
+    // auto-start
+    locateOnce();
+  </script>
+</body>
+</html>
